@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>iSpyWithMyLittleEye - Linear</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;touch-action:none;user-select:none;-webkit-user-select:none}
+body{background:#000;overflow:hidden;position:relative}
+canvas{display:block;width:100%;height:100vh}
+#controls{position:fixed;bottom:20px;left:0;right:0;display:flex;justify-content:space-between;padding:0 20px;pointer-events:none;z-index:10}
+.btn{width:80px;height:80px;border-radius:50%;background:rgba(0,255,255,0.3);border:3px solid #0ff;color:#fff;font-size:14px;font-weight:bold;display:flex;align-items:center;justify-content:center;pointer-events:auto;backdrop-filter:blur(5px);transition:all 0.1s}
+.btn:active,.btn.active{background:rgba(0,255,255,0.6);transform:scale(0.95)}
+#jumpBtn{margin-right:auto}
+#pauseBtn{margin-left:auto;background:rgba(255,170,0,0.3);border-color:#fa0}
+@media(min-width:768px){#controls{display:none}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="controls">
+  <div id="jumpBtn" class="btn">ПРЫЖОК</div>
+  <div id="pauseBtn" class="btn">ПАУЗА</div>
+</div>
+
+<script>
+const c=document.getElementById('c'),ctx=c.getContext('2d');
+let W,H;
+function resize(){W=c.width=window.innerWidth;H=c.height=window.innerHeight}
+window.addEventListener('resize',resize);
+resize();
+
+const GD_GRAVITY=0.85;
+const GD_JUMP=-12.5;
+const GD_SPEED=6.5;
+const BLOCK=40;
+
+let player={x:100,y:400,w:40,h:40,vy:0,mode:'cube',rotation:0,onGround:false};
+let camera={x:0};
+let level={blocks:[],spikes:[],saws:[],movingBlocks:[],portals:[],finishX:10000};
+let boss={x:0,y:300,radius:100,state:'idle',timer:0,color:'#fff',attacks:[],active:false};
+
+let frame=0,gameOver=false,victory=false,started=false,paused=false;
+let inputHeld=false;
+let deathTimer=0;
+let sawAngle=0;
+let attempt=1;
+
+function createLevel(){
+  level.blocks=[];level.spikes=[];level.saws=[];level.movingBlocks=[];level.portals=[];
+  const groundY=H-60;let x=400;
+  
+  // ПРЯМОЙ МАРШРУТ - все платформы на одной высоте
+  
+  // 1. Платформа из 3 блоков
+  level.blocks.push({x:x,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK*2,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  x+=220;
+  
+  // 2. Одинарный шип
+  level.spikes.push({x:x,y:groundY-35,w:35,h:35});
+  x+=220;
+  
+  // 3. Платформа из 2 блоков + пила
+  level.blocks.push({x:x,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.saws.push({x:x+BLOCK*1.5,y:groundY-BLOCK*2-BLOCK,radius:18});
+  x+=240;
+  
+  // 4. Двойной шип
+  level.spikes.push({x:x,y:groundY-35,w:35,h:35});
+  level.spikes.push({x:x+45,y:groundY-35,w:35,h:35});
+  x+=240;
+  
+  // 5. Платформа из 4 блоков
+  level.blocks.push({x:x,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK*2,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK*3,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  x+=240;
+  
+  // 6. Блок + пила на земле
+  level.blocks.push({x:x,y:groundY-BLOCK,w:BLOCK,h:BLOCK});
+  level.saws.push({x:x+BLOCK+30,y:groundY-25,radius:22});
+  x+=220;
+  
+  // 7. Платформа из 2 блоков + шип
+  level.blocks.push({x:x,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.spikes.push({x:x+BLOCK+5,y:groundY-BLOCK*2-35,w:35,h:35});
+  x+=240;
+  
+  // 8. Двойной шип
+  level.spikes.push({x:x,y:groundY-35,w:35,h:35});
+  level.spikes.push({x:x+45,y:groundY-35,w:35,h:35});
+  x+=240;
+  
+  // 9. Движущаяся платформа (вертикально)
+  level.movingBlocks.push({x:x,y:groundY-BLOCK*2,w:BLOCK*2,h:BLOCK,startY:groundY-BLOCK*2,endY:groundY-BLOCK*3,speed:1,dir:1});
+  x+=240;
+  
+  // 10. Блок + пила + блок
+  level.blocks.push({x:x,y:groundY-BLOCK,w:BLOCK,h:BLOCK});
+  level.saws.push({x:x+BLOCK+30,y:groundY-25,radius:22});
+  level.blocks.push({x:x+BLOCK+60,y:groundY-BLOCK,w:BLOCK,h:BLOCK});
+  x+=220;
+  
+  // 11. Платформа из 3 блоков
+  level.blocks.push({x:x,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK*2,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  x+=240;
+  
+  // 12. Одинарный шип
+  level.spikes.push({x:x,y:groundY-35,w:35,h:35});
+  x+=220;
+  
+  // 13. Движущаяся платформа (горизонтально)
+  level.movingBlocks.push({x:x,y:groundY-BLOCK*2,w:BLOCK*2,h:BLOCK,startX:x,endX:x+100,speed:1.5,dir:1,horizontal:true});
+  x+=260;
+  
+  // 14. Двойной шип
+  level.spikes.push({x:x,y:groundY-35,w:35,h:35});
+  level.spikes.push({x:x+45,y:groundY-35,w:35,h:35});
+  x+=240;
+  
+  // 15. Большая пила между блоками
+  level.blocks.push({x:x-40,y:groundY-BLOCK,w:BLOCK,h:BLOCK});
+  level.saws.push({x:x,y:groundY-28,radius:28});
+  level.blocks.push({x:x+60,y:groundY-BLOCK,w:BLOCK,h:BLOCK});
+  x+=240;
+  
+  // 16. Финальная платформа из 4 блоков
+  level.blocks.push({x:x,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK*2,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  level.blocks.push({x:x+BLOCK*3,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK});
+  x+=260;
+  
+  // Портал на корабль
+  level.portals.push({x:x,y:groundY-BLOCK*5,w:BLOCK,h:BLOCK*5,type:'ship'});
+  x+=350;
+  
+  // СЕКЦИЯ 2: САМОЛЕТ (прямой маршрут)
+  for(let i=0;i<25;i++){
+    let y=groundY-BLOCK*4-Math.random()*BLOCK*6;
+    
+    // Платформы из 2 блоков
+    if(i%2===0){
+      level.blocks.push({x:x+i*250,y:y,w:BLOCK*2,h:BLOCK});
+    }
+    
+    // Блоки-стены сверху и снизу
+    if(i%4===0){
+      level.blocks.push({x:x+i*250+125,y:0,w:BLOCK,h:BLOCK*2});
+      level.blocks.push({x:x+i*250+125,y:groundY-BLOCK*2,w:BLOCK,h:BLOCK*2});
+    }
+    
+    // Пилы редко
+    if(i%5===0){
+      level.saws.push({x:x+i*250+125,y:y-BLOCK*2,radius:22});
+    }
+    
+    // Шипы на блоках
+    if(i%6===0){
+      level.spikes.push({x:x+i*250+100,y:y-BLOCK-35,w:35,h:35});
+    }
+  }
+  x+=6500;
+  
+  boss.x=x+300;boss.y=H/2;boss.active=false;boss.attacks=[];level.finishX=x+1500;
+}
+
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();inputHeld=true}
+  if(e.code==='KeyR')resetGame();
+  if(e.code==='Escape'||e.code==='KeyP')togglePause();
+  if((e.code==='Space'||e.code==='ArrowUp')&&!started&&!gameOver&&!victory&&!paused)started=true;
+});
+document.addEventListener('keyup',e=>{if(e.code==='Space'||e.code==='ArrowUp')inputHeld=false});
+c.addEventListener('mousedown',()=>{inputHeld=true;if(!started&&!gameOver&&!victory&&!paused)started=true});
+c.addEventListener('mouseup',()=>{inputHeld=false});
+
+const jumpBtn=document.getElementById('jumpBtn');
+const pauseBtn=document.getElementById('pauseBtn');
+
+jumpBtn.addEventListener('touchstart',e=>{e.preventDefault();e.stopPropagation();inputHeld=true;jumpBtn.classList.add('active');if(!started&&!gameOver&&!victory&&!paused)started=true});
+jumpBtn.addEventListener('touchend',e=>{e.preventDefault();e.stopPropagation();inputHeld=false;jumpBtn.classList.remove('active')});
+jumpBtn.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation();inputHeld=true;jumpBtn.classList.add('active');if(!started&&!gameOver&&!victory&&!paused)started=true});
+jumpBtn.addEventListener('mouseup',e=>{e.preventDefault();e.stopPropagation();inputHeld=false;jumpBtn.classList.remove('active')});
+
+pauseBtn.addEventListener('touchstart',e=>{e.preventDefault();e.stopPropagation();togglePause()});
+pauseBtn.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation();togglePause()});
+
+function togglePause(){
+  if(gameOver||victory||!started)return;
+  paused=!paused;
+  pauseBtn.textContent=paused?'ИГРА':'ПАУЗА';
+}
+
+function resetGame(){
+  player={x:100,y:H-200,w:40,h:40,vy:0,mode:'cube',rotation:0,onGround:false};
+  camera.x=0;
+  boss={x:boss.x,y:H/2,radius:100,state:'idle',timer:0,color:'#fff',attacks:[],active:false};
+  frame=0;gameOver=false;victory=false;deathTimer=0;sawAngle=0;paused=false;
+  pauseBtn.textContent='ПАУЗА';
+  createLevel();
+}
+
+function checkCollision(obj1,obj2){
+  return obj1.x<obj2.x+obj2.w&&obj1.x+obj1.w>obj2.x&&obj1.y<obj2.y+obj2.h&&obj1.y+obj1.h>obj2.y;
+}
+
+function update(){
+  if(!started||paused)return;
+  if(gameOver){deathTimer++;if(deathTimer>90){attempt++;resetGame()}return}
+  if(victory)return;
+  
+  frame++;sawAngle+=0.15;
+  const groundY=H-60;
+  
+  if(player.mode==='cube'){
+    player.vy+=GD_GRAVITY;
+    if(inputHeld&&player.onGround){player.vy=GD_JUMP;player.onGround=false}
+    player.rotation+=player.onGround?0:8;
+  }else if(player.mode==='ship'){
+    player.vy+=inputHeld?-0.9:0.6;
+    player.vy=Math.max(-9,Math.min(9,player.vy));
+    player.rotation=player.vy*4;
+  }
+  
+  const steps=3;
+  const stepX=GD_SPEED/steps;
+  
+  for(let step=0;step<steps;step++){
+    player.x+=stepX;
+    player.y+=player.vy/steps;
+    
+    level.blocks.forEach(b=>{
+      if(checkCollision(player,b)){
+        const overlapX=Math.min(player.x+player.w-b.x,b.x+b.w-player.x);
+        const overlapY=Math.min(player.y+player.h-b.y,b.y+b.h-player.y);
+        if(overlapX<overlapY){player.x-=overlapX*(player.x<b.x+b.w/2?1:-1)}
+        else{player.y-=overlapY*(player.y<b.y+b.h/2?1:-1);player.vy=0;player.onGround=true}
+      }
+    });
+    
+    level.movingBlocks.forEach(m=>{
+      if(checkCollision(player,m)){
+        const overlapX=Math.min(player.x+player.w-m.x,m.x+m.w-player.x);
+        const overlapY=Math.min(player.y+player.h-m.y,m.y+m.h-player.y);
+        if(overlapX<overlapY){player.x-=overlapX*(player.x<m.x+m.w/2?1:-1)}
+        else{player.y-=overlapY*(player.y<m.y+m.h/2?1:-1);player.vy=0;player.onGround=true}
+      }
+    });
+  }
+  
+  if(player.y+player.h>groundY){
+    player.y=groundY-player.h;player.vy=0;player.onGround=true;
+    if(player.mode==='cube')player.rotation=Math.round(player.rotation/90)*90;
+  }else if(player.y<0){player.y=0;player.vy=0}
+  else player.onGround=false;
+  
+  level.movingBlocks.forEach(m=>{
+    if(m.horizontal){m.x+=m.speed*m.dir;if(m.x>m.endX||m.x<m.startX)m.dir*=-1}
+    else{m.y+=m.speed*m.dir;if(m.y>m.endY||m.y<m.startY)m.dir*=-1}
+  });
+  
+  level.spikes.forEach(s=>{if(checkCollision(player,s)){gameOver=true;deathTimer=0}});
+  level.saws.forEach(s=>{
+    const dx=player.x+player.w/2-s.x;
+    const dy=player.y+player.h/2-s.y;
+    if(Math.sqrt(dx*dx+dy*dy)<s.radius+player.w/2){gameOver=true;deathTimer=0}
+  });
+  
+  level.portals.forEach(p=>{if(checkCollision(player,p)){player.mode=p.type;if(p.type==='ship')player.y=H/2}});
+  
+  camera.x=player.x-W*0.3;
+  if(player.x>level.finishX-1500&&!boss.active){boss.active=true;boss.x=player.x+500}
+  if(boss.active)updateBoss();
+  if(player.x>level.finishX)victory=true;
+}
+
+function updateBoss(){
+  boss.timer++;boss.x=player.x+600;boss.y=H/2+Math.sin(frame*0.02)*50;
+  if(boss.state==='idle'&&boss.timer>100){boss.state='warning';boss.timer=0}
+  else if(boss.state==='warning'&&boss.timer>35){
+    boss.state='attack';boss.timer=0;
+    let roll=Math.random();
+    if(roll<0.4)boss.attacks.push({type:'laser',x:boss.x-1500,y:player.y-20,w:2000,h:40,life:45});
+    else if(roll<0.7){for(let i=0;i<8;i++)boss.attacks.push({type:'spike',x:boss.x+300+i*80,y:Math.random()*(H-200)+100,w:40,h:40,vx:-12})}
+    else boss.attacks.push({type:'charge',x:boss.x,y:boss.y,w:150,h:150,vx:-25,vy:0});
+  }else if(boss.state==='attack'&&boss.timer>60){boss.state='idle';boss.timer=0}
+  if(boss.state==='idle')boss.color='#fff';
+  else if(boss.state==='warning')boss.color='#fa0';
+  else if(boss.state==='attack')boss.color='#f00';
+  for(let i=boss.attacks.length-1;i>=0;i--){
+    let a=boss.attacks[i];
+    if(a.vx)a.x+=a.vx;if(a.vy)a.y+=a.vy;
+    if(a.life!==undefined){a.life--;if(a.life<=0)boss.attacks.splice(i,1)}
+    else if(a.x<camera.x-300)boss.attacks.splice(i,1);
+    if(checkCollision(player,a)){gameOver=true;deathTimer=0}
+  }
+}
+
+function draw(){
+  let bg=ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#0a0514');bg.addColorStop(1,'#1a0a2e');
+  ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
+  
+  ctx.save();ctx.translate(-camera.x,0);
+  
+  ctx.strokeStyle='rgba(0,255,255,0.05)';ctx.lineWidth=1;
+  for(let i=Math.floor(camera.x/60)*60;i<camera.x+W+60;i+=60){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,H);ctx.stroke()}
+  for(let i=0;i<H;i+=60){ctx.beginPath();ctx.moveTo(camera.x,i);ctx.lineTo(camera.x+W,i);ctx.stroke()}
+  
+  const groundY=H-60;
+  ctx.fillStyle='#111122';ctx.fillRect(camera.x,groundY,W,60);
+  ctx.strokeStyle='#0ff';ctx.lineWidth=3;ctx.shadowBlur=10;ctx.shadowColor='#0ff';
+  ctx.beginPath();ctx.moveTo(camera.x,groundY);ctx.lineTo(camera.x+W,groundY);ctx.stroke();ctx.shadowBlur=0;
+  
+  // Блоки (простые, как в GD)
+  level.blocks.forEach(b=>{
+    ctx.fillStyle='#2a2a3a';
+    ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.strokeStyle='#0ff';
+    ctx.lineWidth=2;
+    ctx.strokeRect(b.x,b.y,b.w,b.h);
+  });
+  
+  // Движущиеся платформы
+  level.movingBlocks.forEach(m=>{
+    ctx.fillStyle='#444';
+    ctx.fillRect(m.x,m.y,m.w,m.h);
+    ctx.strokeStyle='#ff0';
+    ctx.lineWidth=3;
+    ctx.strokeRect(m.x,m.y,m.w,m.h);
+  });
+  
+  // Шипы
+  level.spikes.forEach(s=>{
+    ctx.fillStyle='#f04';
+    ctx.beginPath();
+    ctx.moveTo(s.x,s.y+s.h);
+    ctx.lineTo(s.x+s.w/2,s.y);
+    ctx.lineTo(s.x+s.w,s.y+s.h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle='#fff';
+    ctx.lineWidth=2;
+    ctx.stroke();
+  });
+  
+  // Пилы
+  level.saws.forEach(s=>{
+    ctx.save();
+    ctx.translate(s.x,s.y);
+    ctx.rotate(sawAngle);
+    ctx.fillStyle='#888';
+    ctx.beginPath();
+    for(let i=0;i<8;i++){
+      let angle=(i/8)*Math.PI*2;
+      let r=i%2===0?s.radius:s.radius*0.6;
+      ctx.lineTo(Math.cos(angle)*r,Math.sin(angle)*r);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle='#fff';
+    ctx.lineWidth=2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0,0,s.radius*0.3,0,Math.PI*2);
+    ctx.fillStyle='#333';
+    ctx.fill();
+    ctx.restore();
+  });
+  
+  // Порталы
+  level.portals.forEach(p=>{
+    ctx.fillStyle='rgba(0,255,255,0.3)';
+    ctx.fillRect(p.x,p.y,p.w,p.h);
+    ctx.strokeStyle='#0ff';
+    ctx.lineWidth=3;
+    ctx.strokeRect(p.x,p.y,p.w,p.h);
+    ctx.fillStyle='#0ff';
+    ctx.font='bold 20px Arial';
+    ctx.textAlign='center';
+    ctx.fillText('SHIP',p.x+p.w/2,p.y+p.h/2);
+  });
+  
+  // Атаки босса
+  boss.attacks.forEach(a=>{
+    if(a.type==='laser'){
+      ctx.fillStyle=`rgba(255,0,0,${a.life/45})`;
+      ctx.shadowBlur=20;ctx.shadowColor='#f00';
+      ctx.fillRect(a.x,a.y,a.w,a.h);
+      ctx.shadowBlur=0;
+    }else if(a.type==='spike'){
+      ctx.fillStyle='#f04';
+      ctx.beginPath();
+      ctx.moveTo(a.x,a.y+a.h);
+      ctx.lineTo(a.x+a.w/2,a.y);
+      ctx.lineTo(a.x+a.w,a.y+a.h);
+      ctx.fill();
+    }else if(a.type==='charge'){
+      ctx.fillStyle='#f00';
+      ctx.beginPath();
+      ctx.arc(a.x+a.w/2,a.y+a.h/2,a.w/2,0,Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle='#fff';
+      ctx.lineWidth=4;
+      ctx.stroke();
+    }
+  });
+  
+  if(boss.active)drawBoss();
+  drawPlayer();
+  
+  ctx.fillStyle='#0f0';
+  ctx.fillRect(level.finishX,0,20,H);
+  ctx.fillStyle='#fff';
+  ctx.font='bold 30px Arial';
+  ctx.textAlign='center';
+  ctx.fillText('FINISH',level.finishX+10,100);
+  ctx.restore();
+  
+  ctx.fillStyle='#fff';
+  ctx.font='bold 24px Arial';
+  ctx.textAlign='left';
+  let progress=Math.floor((player.x/level.finishX)*100);
+  ctx.fillText(`Прогресс: ${Math.min(progress,100)}%`,20,40);
+  ctx.textAlign='right';
+  ctx.fillText(`Попытка ${attempt}`,W-20,40);
+  
+  if(!started){
+    ctx.fillStyle='rgba(0,0,0,0.9)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#0ff';
+    ctx.font='bold 72px Arial';
+    ctx.textAlign='center';
+    ctx.fillText('iSpyWithMyLittleEye',W/2,H/2-60);
+    ctx.font='bold 36px Arial';
+    ctx.fillStyle='#fa0';
+    ctx.fillText(`Попытка ${attempt}`,W/2,H/2);
+    ctx.font='28px Arial';
+    ctx.fillStyle='#fff';
+    ctx.fillText('Нажми ПРОБЕЛ или кнопку ПРЫЖОК',W/2,H/2+60);
+  }
+  
+  if(paused){
+    ctx.fillStyle='rgba(0,0,0,0.85)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#fa0';
+    ctx.font='bold 80px Arial';
+    ctx.textAlign='center';
+    ctx.fillText('ПАУЗА',W/2,H/2-80);
+    let btnW=300,btnH=60;
+    let btnX=W/2-btnW/2,btnY=H/2-20;
+    ctx.fillStyle='rgba(0,255,255,0.3)';
+    ctx.fillRect(btnX,btnY,btnW,btnH);
+    ctx.strokeStyle='#0ff';
+    ctx.lineWidth=3;
+    ctx.strokeRect(btnX,btnY,btnW,btnH);
+    ctx.fillStyle='#fff';
+    ctx.font='bold 32px Arial';
+    ctx.fillText('ПРОДОЛЖИТЬ',W/2,btnY+40);
+    btnY=H/2+60;
+    ctx.fillStyle='rgba(255,0,68,0.3)';
+    ctx.fillRect(btnX,btnY,btnW,btnH);
+    ctx.strokeStyle='#f04';
+    ctx.lineWidth=3;
+    ctx.strokeRect(btnX,btnY,btnW,btnH);
+    ctx.fillStyle='#fff';
+    ctx.fillText('РЕСТАРТ',W/2,btnY+40);
+    window._pauseBtns={continue:{x:btnX,y:btnY-80,w:btnW,h:btnH},restart:{x:btnX,y:btnY,w:btnW,h:btnH}};
+    ctx.font='20px Arial';
+    ctx.fillStyle='#aaa';
+    ctx.fillText('Нажми Esc или P чтобы продолжить',W/2,H/2+180);
+  }else{window._pauseBtns=null}
+  
+  if(gameOver){ctx.fillStyle=`rgba(255,0,0,${0.5-deathTimer/180})`;ctx.fillRect(0,0,W,H)}
+  if(victory){
+    ctx.fillStyle='rgba(0,0,0,0.9)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#0f0';
+    ctx.font='bold 80px Arial';
+    ctx.textAlign='center';
+    ctx.fillText('УРОВЕНЬ ПРОЙДЕН!',W/2,H/2-20);
+    ctx.fillStyle='#fff';
+    ctx.font='28px Arial';
+    ctx.fillText(`Попыток: ${attempt}`,W/2,H/2+40);
+  }
+}
+
+function drawPlayer(){
+  ctx.save();
+  ctx.translate(player.x+player.w/2,player.y+player.h/2);
+  ctx.rotate(player.rotation*Math.PI/180);
+  ctx.shadowBlur=15;
+  ctx.shadowColor='#0ff';
+  if(player.mode==='cube'){
+    ctx.fillStyle='#0ff';
+    ctx.fillRect(-player.w/2,-player.h/2,player.w,player.h);
+    ctx.strokeStyle='#fff';
+    ctx.lineWidth=2;
+    ctx.strokeRect(-player.w/2,-player.h/2,player.w,player.h);
+    ctx.fillStyle='#000';
+    ctx.fillRect(6,-10,12,12);
+    ctx.fillStyle='#fff';
+    ctx.fillRect(9,-8,5,5);
+  }else if(player.mode==='ship'){
+    ctx.fillStyle='#0ff';
+    ctx.beginPath();
+    ctx.moveTo(-25,0);ctx.lineTo(20,-8);ctx.lineTo(30,0);ctx.lineTo(20,8);ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle='#fff';
+    ctx.lineWidth=2;
+    ctx.stroke();
+    ctx.fillStyle='#0ff';
+    ctx.beginPath();
+    ctx.moveTo(-10,-5);ctx.lineTo(5,-20);ctx.lineTo(15,-20);ctx.lineTo(10,-5);ctx.closePath();
+    ctx.fill();ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-10,5);ctx.lineTo(5,20);ctx.lineTo(15,20);ctx.lineTo(10,5);ctx.closePath();
+    ctx.fill();ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-20,0);ctx.lineTo(-28,-12);ctx.lineTo(-22,-12);ctx.lineTo(-18,0);ctx.closePath();
+    ctx.fill();ctx.stroke();
+    ctx.fillStyle='#fff';
+    ctx.beginPath();
+    ctx.ellipse(8,0,8,5,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle='#ff0';
+    ctx.shadowBlur=10;
+    ctx.shadowColor='#ff0';
+    ctx.beginPath();
+    ctx.arc(-25,0,4,0,Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+  ctx.shadowBlur=0;
+}
+
+function drawBoss(){
+  let bx=boss.x,by=boss.y,r=boss.radius;
+  let glow=ctx.createRadialGradient(bx,by,0,bx,by,r*2.5);
+  glow.addColorStop(0,boss.color+'60');
+  glow.addColorStop(1,'transparent');
+  ctx.fillStyle=glow;
+  ctx.fillRect(bx-r*3,by-r*3,r*6,r*6);
+  ctx.beginPath();
+  ctx.arc(bx,by,r,0,Math.PI*2);
+  ctx.fillStyle=boss.color;
+  ctx.fill();
+  ctx.strokeStyle='#000';
+  ctx.lineWidth=6;
+  ctx.stroke();
+  let dx=player.x-bx,dy=player.y-by,dist=Math.sqrt(dx*dx+dy*dy)||1;
+  let px=bx+(dx/dist)*30,py=by+(dy/dist)*30;
+  ctx.beginPath();
+  ctx.arc(px,py,35,0,Math.PI*2);
+  ctx.fillStyle='#000';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(px-12,py-12,12,0,Math.PI*2);
+  ctx.fillStyle='#fff';
+  ctx.fill();
+  if(boss.state!=='idle'){
+    ctx.beginPath();
+    ctx.arc(bx,by,r+20,0,Math.PI*2);
+    ctx.strokeStyle=boss.color;
+    ctx.lineWidth=4;
+    ctx.setLineDash([15,10]);
+    ctx.lineDashOffset=-frame*5;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+c.addEventListener('click',e=>{
+  if(paused&&window._pauseBtns){
+    const rect=c.getBoundingClientRect();
+    const x=e.clientX-rect.left;
+    const y=e.clientY-rect.top;
+    const btns=window._pauseBtns;
+    if(x>=btns.continue.x&&x<=btns.continue.x+btns.continue.w&&y>=btns.continue.y&&y<=btns.continue.y+btns.continue.h)togglePause();
+    else if(x>=btns.restart.x&&x<=btns.restart.x+btns.restart.w&&y>=btns.restart.y&&y<=btns.restart.y+btns.restart.h){attempt++;resetGame()}
+  }
+});
+
+function loop(){update();draw();requestAnimationFrame(loop)}
+createLevel();loop();
+</script>
+</body>
+</html>
